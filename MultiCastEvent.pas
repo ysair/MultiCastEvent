@@ -2,46 +2,45 @@ unit MultiCastEvent;
 
 interface
 
-uses System.SysUtils, System.Classes, System.ObjAuto, System.TypInfo;
+uses
+  System.SysUtils, System.Classes, System.ObjAuto, System.TypInfo,
+  Generics.Collections;
 
 type
   TMultiCastEvent = class
   strict private
     type TEvent = procedure of object;
   strict private
-    FHandlers: array of TMethod;
     FInternalDispatcher: TMethod; // this class needs to keep it's own reference for cleanup later
     procedure InternalInvoke(Params: PParameters; StackSize: Integer);
     procedure InternalInvokeAMethod(const aMethod: TMethod; const aParams:
         PParameters; aStackSize: Integer);
     procedure ReleaseInternalDispatcher;
     procedure SetDispatcher(var aMethod: TMethod; aTypeData: PTypeData);
+  private
+    FHandlers: TList<TMethod>;
   protected
-    procedure InternalAdd;
     procedure InternalSetDispatcher;
   public
     constructor Create; virtual;
-    procedure BeforeDestruction; override;
-    procedure Add(const aEvent: TEvent); overload;
+    destructor Destroy; override;
   end;
 
   TMultiCastEvent<T> = class(TMultiCastEvent)
   strict private
     FInvoke: T;
     procedure SetEventDispatcher(var ADispatcher: T; ATypeData: PTypeData);
+  private
+    function ConvertToMethod(var Value): TMethod;
   public
     constructor Create; overload; override;
     constructor Create(aEvents: array of T); reintroduce; overload;
-    procedure Add(const AMethod: T); overload;
+    procedure Add(AMethod: T);
+    procedure Remove(AMethod: T);
     property Invoke: T read FInvoke;
   end;
 
 implementation
-
-procedure TMultiCastEvent.Add(const aEvent: TEvent);
-begin
-  FHandlers := FHandlers + [TMethod(aEvent)];
-end;
 
 procedure TMultiCastEvent.SetDispatcher(var aMethod: TMethod; aTypeData:
     PTypeData);
@@ -51,19 +50,20 @@ begin
   aMethod := FInternalDispatcher;
 end;
 
-procedure TMultiCastEvent.BeforeDestruction;
-begin
-  inherited;
-  ReleaseInternalDispatcher;
-end;
-
 constructor TMultiCastEvent.Create;
 begin
   inherited;
-  FHandlers := [];
+  FHandlers := TList<TMethod>.Create;
 end;
 
-procedure TMultiCastEvent.InternalAdd;
+destructor TMultiCastEvent.Destroy;
+begin
+  ReleaseMethodPointer(FInternalDispatcher);
+  FHandlers.Free;
+  inherited;
+end;
+
+(*procedure TMultiCastEvent.InternalAdd;
 asm
 {$ifdef Win32}
   xchg  [esp],eax
@@ -79,7 +79,15 @@ asm
   pop   rbp
   jmp   Add
 {$ifend}
-end;
+end;*)
+
+{procedure TMultiCastEvent.InternalRemove;
+asm
+  XCHG  EAX,[ESP]
+  POP   EAX
+  POP   EBP
+  JMP   Remove
+end;//}
 
 procedure TMultiCastEvent.InternalInvoke(Params: PParameters; StackSize:
     Integer);
@@ -214,9 +222,18 @@ begin
     ReleaseMethodPointer(FInternalDispatcher);
 end;
 
-procedure TMultiCastEvent<T>.Add(const AMethod: T);
+procedure TMultiCastEvent<T>.Add(AMethod: T);
+var
+  m: TMethod;
 begin
-  InternalAdd;
+  m := ConvertToMethod(AMethod);
+  if FHandlers.IndexOf(m) < 0 then
+    FHandlers.Add(m);
+end;
+
+procedure TMultiCastEvent<T>.Remove(AMethod: T);
+begin
+  FHandlers.Remove(ConvertToMethod(AMethod));
 end;
 
 constructor TMultiCastEvent<T>.Create;
@@ -228,6 +245,11 @@ begin
   D := GetTypeData(M);
   Assert(M.Kind = tkMethod, 'T must be a method pointer type');
   SetEventDispatcher(FInvoke, D);
+end;
+
+function TMultiCastEvent<T>.ConvertToMethod(var Value): TMethod;
+begin
+  Result := TMethod(Value);
 end;
 
 constructor TMultiCastEvent<T>.Create(aEvents: array of T);
